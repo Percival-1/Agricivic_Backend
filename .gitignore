@@ -169,7 +169,13 @@ logs/
 data/chroma_db/
 data/backups/
 uploads/
-static/uploads/
+static/
+docs/
+tests/
+htmlcov/
+examples/
+sample_templates/
+scripts/
 
 # Project specific - Database
 *.db
