@@ -25,7 +25,12 @@ class Settings(BaseSettings):
     )
     debug: bool = Field(default=True, description="Debug mode")
     allowed_origins: List[str] = Field(
-        default=["*"], description="CORS allowed origins"
+        default=[
+            "http://localhost:3000",
+            "http://localhost:5173",
+            "http://localhost:8000",
+        ],
+        description="CORS allowed origins",
     )
 
     # Database settings
@@ -119,7 +124,7 @@ class Settings(BaseSettings):
 
     # ChromaDB settings
     chroma_host: str = Field(default="localhost", description="ChromaDB host")
-    chroma_port: int = Field(default=8000, description="ChromaDB port")
+    chroma_port: int = Field(default=8001, description="ChromaDB port")
     chroma_persist_directory: str = Field(
         default="./data/chroma_db", description="ChromaDB persistence directory"
     )
@@ -143,10 +148,12 @@ class Settings(BaseSettings):
 
     # Security settings
     secret_key: str = Field(
-        default="your-secret-key-change-in-production", description="Secret key for JWT"
+        default="dev-secret-key-change-in-production-min-32-chars",
+        description="Secret key for JWT",
     )
     jwt_secret_key: str = Field(
-        default="your-jwt-secret-key-change-in-production", description="JWT Secret key"
+        default="dev-jwt-secret-key-change-in-production-min-32-chars",
+        description="JWT Secret key",
     )
 
     algorithm: str = Field(default="HS256", description="JWT algorithm")
@@ -160,7 +167,7 @@ class Settings(BaseSettings):
     # Rate limiting settings
     rate_limit_enabled: bool = Field(default=True, description="Enable rate limiting")
     rate_limit_calls: int = Field(
-        default=100, description="Number of calls allowed per period"
+        default=1000, description="Number of calls allowed per period"
     )
     rate_limit_period: int = Field(
         default=60, description="Rate limit period in seconds"
@@ -197,6 +204,19 @@ class Settings(BaseSettings):
     log_format: str = Field(
         default="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
         description="Log format",
+    )
+
+    # CSP (Content Security Policy) settings
+    csp_enabled: bool = Field(
+        default=True, description="Enable Content Security Policy headers"
+    )
+    csp_report_only: bool = Field(
+        default=False,
+        description="Use CSP in report-only mode (logs violations without blocking)",
+    )
+    csp_relaxed: bool = Field(
+        default=False,
+        description="Use relaxed CSP for production (allows more sources)",
     )
 
 

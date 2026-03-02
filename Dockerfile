@@ -47,13 +47,11 @@ COPY --from=builder /root/.local /root/.local
 
 # Copy application code
 COPY app/ ./app/
-COPY scripts/ ./scripts/
 COPY alembic.ini .
-COPY alembic/ ./alembic/
+COPY migrations/ ./migrations/
 
 # Copy utility scripts for deployment
-COPY create_admin_user.py .
-COPY check_*.py ./
+COPY admin_creater_checker/ ./admin_creater_checker/
 
 # Create necessary directories and set permissions
 RUN mkdir -p logs data/chroma_db uploads && \

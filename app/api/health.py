@@ -6,7 +6,7 @@ import asyncio
 from datetime import datetime
 from typing import Dict, Any, Optional
 
-from fastapi import APIRouter, status, Response
+from fastapi import APIRouter, status, Response, Request
 from pydantic import BaseModel
 
 from app.config import get_settings
@@ -16,6 +16,23 @@ settings = get_settings()
 logger = get_logger(__name__)
 
 router = APIRouter()
+
+
+def get_client_ip(request: Request) -> str:
+    """
+    Extract real client IP from request, handling ALB X-Forwarded-For header.
+
+    ALB adds X-Forwarded-For header with format: client_ip, proxy1_ip, proxy2_ip
+    We want the first IP (real client).
+    """
+    forwarded_for = request.headers.get("x-forwarded-for")
+    if forwarded_for:
+        # Get first IP from comma-separated list
+        client_ip = forwarded_for.split(",")[0].strip()
+        return client_ip
+
+    # Fallback to direct client IP
+    return request.client.host if request.client else "unknown"
 
 
 class HealthResponse(BaseModel):
@@ -213,8 +230,28 @@ async def check_external_apis_health() -> ServiceHealthStatus:
 
 
 @router.get("/health", response_model=HealthResponse, status_code=status.HTTP_200_OK)
-async def health_check() -> HealthResponse:
-    """Basic health check endpoint."""
+async def health_check(request: Request) -> HealthResponse:
+    """
+    Basic health check endpoint.
+
+    ALB-compatible health check that handles:
+    - X-Forwarded-For: Real client IP
+    - X-Forwarded-Proto: Original protocol (http/https)
+    - X-Forwarded-Port: Original port
+    """
+    # Log ALB headers for monitoring
+    forwarded_for = request.headers.get("x-forwarded-for")
+    forwarded_proto = request.headers.get("x-forwarded-proto")
+    forwarded_port = request.headers.get("x-forwarded-port")
+
+    if forwarded_for or forwarded_proto or forwarded_port:
+        logger.debug(
+            f"ALB Health Check - "
+            f"Client: {forwarded_for or 'unknown'}, "
+            f"Proto: {forwarded_proto or 'unknown'}, "
+            f"Port: {forwarded_port or 'unknown'}"
+        )
+
     return HealthResponse(
         status="healthy",
         timestamp=datetime.utcnow(),

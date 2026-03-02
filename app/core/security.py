@@ -372,7 +372,15 @@ class SecureHeaders:
 
     @staticmethod
     def get_production_headers() -> Dict[str, str]:
-        """Get security headers for production environment."""
+        """
+        Get security headers for production environment.
+
+        CSP is configured to allow:
+        - API calls to same origin and external APIs
+        - Images from CDNs and data URIs
+        - WebSocket connections for Socket.IO
+        - External fonts if needed
+        """
         return {
             "X-Content-Type-Options": "nosniff",
             "X-Frame-Options": "DENY",
@@ -381,14 +389,19 @@ class SecureHeaders:
             "Permissions-Policy": "geolocation=(), microphone=(), camera=()",
             "Content-Security-Policy": (
                 "default-src 'self'; "
-                "script-src 'self'; "
-                "style-src 'self'; "
-                "img-src 'self' data: https:; "
-                "font-src 'self'; "
-                "connect-src 'self'; "
-                "frame-ancestors 'none';"
+                "script-src 'self' 'unsafe-inline'; "  # Allow inline scripts for API responses
+                "style-src 'self' 'unsafe-inline'; "  # Allow inline styles
+                "img-src 'self' data: https: blob:; "  # Allow images from CDNs, data URIs, and blobs
+                "font-src 'self' data: https:; "  # Allow fonts from CDNs
+                "connect-src 'self' https: wss: ws:; "  # Allow API calls and WebSocket (Socket.IO)
+                "media-src 'self' https: blob:; "  # Allow audio/video from CDNs
+                "object-src 'none'; "  # Block plugins
+                "base-uri 'self'; "  # Restrict base tag
+                "form-action 'self'; "  # Restrict form submissions
+                "frame-ancestors 'none'; "  # Prevent clickjacking
+                "upgrade-insecure-requests;"  # Upgrade HTTP to HTTPS
             ),
-            "Strict-Transport-Security": "max-age=31536000; includeSubDomains",
+            "Strict-Transport-Security": "max-age=31536000; includeSubDomains; preload",
         }
 
     @staticmethod
@@ -406,6 +419,35 @@ class SecureHeaders:
                 "img-src 'self' https: data:; "
                 "font-src 'self' https: data:;"
             ),
+        }
+
+    @staticmethod
+    def get_relaxed_production_headers() -> Dict[str, str]:
+        """
+        Get relaxed security headers for production when strict CSP causes issues.
+
+        Use this temporarily while debugging CSP issues, then tighten gradually.
+        Set CSP_RELAXED=true in environment to use this.
+        """
+        return {
+            "X-Content-Type-Options": "nosniff",
+            "X-Frame-Options": "DENY",
+            "X-XSS-Protection": "1; mode=block",
+            "Referrer-Policy": "strict-origin-when-cross-origin",
+            "Permissions-Policy": "geolocation=(), microphone=(), camera=()",
+            "Content-Security-Policy": (
+                "default-src 'self' https:; "
+                "script-src 'self' 'unsafe-inline' 'unsafe-eval' https:; "
+                "style-src 'self' 'unsafe-inline' https:; "
+                "img-src 'self' data: https: blob:; "
+                "font-src 'self' data: https:; "
+                "connect-src 'self' https: wss: ws:; "
+                "media-src 'self' https: blob:; "
+                "object-src 'none'; "
+                "base-uri 'self'; "
+                "form-action 'self';"
+            ),
+            "Strict-Transport-Security": "max-age=31536000; includeSubDomains",
         }
 
 

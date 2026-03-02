@@ -36,13 +36,36 @@ logger = logging.getLogger(__name__)
 class LoggingMiddleware(BaseHTTPMiddleware):
     """Middleware for logging requests and responses."""
 
+    def get_client_ip(self, request: Request) -> str:
+        """
+        Extract real client IP from request, handling ALB X-Forwarded-For header.
+
+        ALB adds X-Forwarded-For header with format: client_ip, proxy1_ip, proxy2_ip
+        We want the first IP (real client).
+        """
+        forwarded_for = request.headers.get("x-forwarded-for")
+        if forwarded_for:
+            # Get first IP from comma-separated list
+            client_ip = forwarded_for.split(",")[0].strip()
+            return client_ip
+
+        # Fallback to direct client IP
+        return request.client.host if request.client else "unknown"
+
     async def dispatch(self, request: Request, call_next):
         start_time = time.time()
+
+        # Get real client IP (handles ALB X-Forwarded-For)
+        client_ip = self.get_client_ip(request)
+
+        # Get protocol from ALB header
+        forwarded_proto = request.headers.get("x-forwarded-proto", "http")
 
         # Log request
         logger.info(
             f"Request: {request.method} {request.url.path} - "
-            f"Client: {request.client.host if request.client else 'unknown'}"
+            f"Client: {client_ip} - "
+            f"Proto: {forwarded_proto}"
         )
 
         try:
@@ -167,11 +190,37 @@ sio = get_socketio_app()
 socket_app = socketio.ASGIApp(sio, app, socketio_path="socket.io")
 
 # Security middleware
+# Security middleware - TrustedHost
 if settings.environment == "production":
+    # Parse allowed origins to extract hostnames
+    allowed_hosts = []
+    for origin in settings.allowed_origins:
+        if origin != "*":
+            # Extract hostname from URL
+            from urllib.parse import urlparse
+
+            parsed = urlparse(origin)
+            if parsed.hostname:
+                allowed_hosts.append(parsed.hostname)
+
+    # Add ALB DNS name if configured
+    alb_dns = os.getenv("ALB_DNS_NAME")
+    if alb_dns:
+        allowed_hosts.append(alb_dns)
+        logger.info(f"Added ALB DNS to trusted hosts: {alb_dns}")
+
+    # If no specific hosts configured, use wildcard (not recommended)
+    if not allowed_hosts:
+        logger.warning(
+            "TrustedHostMiddleware: No specific hosts configured, using wildcard"
+        )
+        allowed_hosts = ["*"]
+
     app.add_middleware(
         TrustedHostMiddleware,
-        allowed_hosts=["*"],  # Configure with actual allowed hosts in production
+        allowed_hosts=allowed_hosts,
     )
+    logger.info(f"TrustedHostMiddleware enabled with hosts: {allowed_hosts}")
 
 # CORS middleware - MUST be added before other middlewares to handle OPTIONS requests
 app.add_middleware(

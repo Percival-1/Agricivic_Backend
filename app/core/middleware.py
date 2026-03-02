@@ -20,6 +20,22 @@ logger = get_logger(__name__)
 class PerformanceMonitoringMiddleware(BaseHTTPMiddleware):
     """Middleware to track performance metrics for all requests."""
 
+    def get_client_ip(self, request: Request) -> str:
+        """
+        Extract real client IP from request, handling ALB X-Forwarded-For header.
+
+        ALB adds X-Forwarded-For header with format: client_ip, proxy1_ip, proxy2_ip
+        We want the first IP (real client).
+        """
+        forwarded_for = request.headers.get("x-forwarded-for")
+        if forwarded_for:
+            # Get first IP from comma-separated list
+            client_ip = forwarded_for.split(",")[0].strip()
+            return client_ip
+
+        # Fallback to direct client IP
+        return request.client.host if request.client else None
+
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         start_time = time.time()
         request_id = getattr(request.state, "request_id", str(uuid.uuid4()))
@@ -41,6 +57,9 @@ class PerformanceMonitoringMiddleware(BaseHTTPMiddleware):
             # Import here to avoid circular dependency
             from app.services.performance_monitoring import performance_monitor
 
+            # Get real client IP (handles ALB X-Forwarded-For)
+            client_ip = self.get_client_ip(request)
+
             # Record the request metrics
             await performance_monitor.record_request(
                 request_id=request_id,
@@ -49,7 +68,7 @@ class PerformanceMonitoringMiddleware(BaseHTTPMiddleware):
                 status_code=status_code,
                 response_time=response_time,
                 user_agent=request.headers.get("user-agent"),
-                client_ip=request.client.host if request.client else None,
+                client_ip=client_ip,
                 error=error_message,
             )
 
@@ -78,9 +97,25 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
         # Get appropriate headers based on environment
         if settings.environment == "production":
-            headers = secure_headers.get_production_headers()
+            if settings.csp_relaxed:
+                headers = secure_headers.get_relaxed_production_headers()
+                logger.info("Using relaxed CSP for production")
+            else:
+                headers = secure_headers.get_production_headers()
         else:
             headers = secure_headers.get_development_headers()
+
+        # Handle CSP configuration
+        if not settings.csp_enabled:
+            # Remove CSP header if disabled
+            headers.pop("Content-Security-Policy", None)
+            logger.info("CSP disabled via configuration")
+        elif settings.csp_report_only:
+            # Use report-only mode (logs violations without blocking)
+            csp_value = headers.pop("Content-Security-Policy", None)
+            if csp_value:
+                headers["Content-Security-Policy-Report-Only"] = csp_value
+                logger.info("CSP in report-only mode")
 
         # Apply all security headers
         for header, value in headers.items():
@@ -182,7 +217,13 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if not settings.rate_limit_enabled:
             return await call_next(request)
 
-        client_ip = request.client.host if request.client else "unknown"
+        # Get real client IP (handles ALB X-Forwarded-For)
+        forwarded_for = request.headers.get("x-forwarded-for")
+        if forwarded_for:
+            client_ip = forwarded_for.split(",")[0].strip()
+        else:
+            client_ip = request.client.host if request.client else "unknown"
+
         current_time = time.time()
 
         # Check rate limit
@@ -253,13 +294,25 @@ class HTTPSRedirectMiddleware(BaseHTTPMiddleware):
         if settings.environment == "production" and settings.force_https:
             # Check if request is not HTTPS
             if request.url.scheme != "https":
-                # Check for proxy headers
+                # Check for proxy headers (ALB terminates SSL)
                 forwarded_proto = request.headers.get("x-forwarded-proto")
+
                 if forwarded_proto != "https":
+                    # Log redirect for monitoring
+                    logger.warning(
+                        f"HTTPS redirect: {request.method} {request.url.path} - "
+                        f"Proto: {forwarded_proto or 'none'}"
+                    )
+
                     # Redirect to HTTPS
                     url = request.url.replace(scheme="https")
                     from fastapi.responses import RedirectResponse
 
                     return RedirectResponse(url=str(url), status_code=301)
+                else:
+                    # ALB already handling HTTPS, log for debugging
+                    logger.debug(
+                        f"Request via ALB HTTPS: {request.method} {request.url.path}"
+                    )
 
         return await call_next(request)

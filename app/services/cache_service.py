@@ -17,6 +17,10 @@ from datetime import datetime, timedelta
 from functools import wraps
 
 import redis.asyncio as redis
+from redis.exceptions import (
+    AuthenticationError,
+    ConnectionError as RedisConnectionError,
+)
 
 from app.config import get_settings
 from app.core.logging import get_logger
@@ -124,19 +128,35 @@ class CacheService:
         }
 
     async def initialize(self):
-        """Initialize Redis connection."""
+        """Initialize Redis connection with password support."""
         try:
+            # Parse Redis URL to ensure password is included
+            redis_url = self.settings.redis_url
+            logger.info(
+                f"Initializing Redis connection to: {redis_url.split('@')[-1] if '@' in redis_url else redis_url}"
+            )
+
             self.redis_client = redis.from_url(
-                self.settings.redis_url,
+                redis_url,
                 encoding="utf-8",
                 decode_responses=True,
                 socket_timeout=5,
                 socket_connect_timeout=5,
+                max_connections=self.settings.redis_max_connections,
             )
+
+            # Test connection with ping
             await self.redis_client.ping()
-            logger.info("Cache service Redis connection established")
-        except Exception as e:
+            logger.info("Cache service Redis connection established successfully")
+
+        except AuthenticationError as e:
+            logger.error(f"Redis authentication failed - check REDIS_URL password: {e}")
+            self.redis_client = None
+        except RedisConnectionError as e:
             logger.warning(f"Redis connection failed, using memory cache only: {e}")
+            self.redis_client = None
+        except Exception as e:
+            logger.warning(f"Redis initialization error, using memory cache only: {e}")
             self.redis_client = None
 
     async def close(self):
@@ -691,7 +711,7 @@ class CacheService:
         logger.info("Cache service metrics reset")
 
     async def health_check(self) -> Dict[str, Any]:
-        """Perform health check on cache service."""
+        """Perform health check on cache service with detailed diagnostics."""
         health_status = {
             "status": "healthy",
             "memory_cache": {"status": "healthy", "healthy": True},
@@ -706,11 +726,43 @@ class CacheService:
         # Check Redis cache
         if self.redis_client:
             try:
-                await self.redis_client.ping()
+                # Test Redis connection with ping
+                ping_result = await self.redis_client.ping()
+
+                if ping_result:
+                    health_status["redis_cache"] = {
+                        "status": "healthy",
+                        "healthy": True,
+                        "connection": "active",
+                    }
+                else:
+                    health_status["redis_cache"] = {
+                        "status": "unhealthy",
+                        "healthy": False,
+                        "error": "Ping returned False",
+                    }
+                    health_status["status"] = "degraded"
+
+            except redis.AuthenticationError as e:
                 health_status["redis_cache"] = {
-                    "status": "healthy",
-                    "healthy": True,
+                    "status": "unhealthy",
+                    "healthy": False,
+                    "error": f"Authentication failed: {str(e)}",
+                    "hint": "Check REDIS_URL password in .env file",
                 }
+                health_status["status"] = "degraded"
+                logger.error(f"Redis health check - authentication failed: {e}")
+
+            except redis.ConnectionError as e:
+                health_status["redis_cache"] = {
+                    "status": "unhealthy",
+                    "healthy": False,
+                    "error": f"Connection failed: {str(e)}",
+                    "hint": "Check if Redis server is running",
+                }
+                health_status["status"] = "degraded"
+                logger.error(f"Redis health check - connection failed: {e}")
+
             except Exception as e:
                 health_status["redis_cache"] = {
                     "status": "unhealthy",
@@ -718,10 +770,12 @@ class CacheService:
                     "error": str(e),
                 }
                 health_status["status"] = "degraded"
+                logger.error(f"Redis health check failed: {e}")
         else:
             health_status["redis_cache"] = {
                 "status": "not_configured",
                 "healthy": False,
+                "message": "Redis client not initialized - using memory cache only",
             }
             health_status["status"] = "degraded"
 
